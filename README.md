@@ -22,53 +22,59 @@ Document Copilot indexes your text documents and provides an intelligent chatbot
 ## Installation
 
 1. Clone the repository:
+
    ```bash
    git clone <repository-url>
    cd document_copilot
    ```
 
 2. Install dependencies:
+
    ```bash
    npm install
    ```
 
 3. Create a `.env` file:
+
    ```env
    OPENAI_API_KEY=your_openai_api_key
    PORT=3005
    DATA_SOURCE_PATH=./data/source.txt
    DATABASE_URL=file:documents.db
-   OPENAI_MODEL=gpt-4o-mini
+   OPENAI_MODEL=gpt-5-mini
    OPENAI_EMBEDDING_MODEL=text-embedding-3-small
    ```
 
 4. Add your source document:
+
    ```bash
    mkdir -p data
    echo "Your document content here..." > data/source.txt
    ```
 
 5. Build and run:
+
    ```bash
    npm run build
    npm start
    ```
 
    For development with hot reload:
+
    ```bash
    npm run dev
    ```
 
 ## Configuration
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENAI_API_KEY` | Your OpenAI API key | Required |
-| `PORT` | Server port | `3005` |
-| `DATA_SOURCE_PATH` | Path to source text file | `./data/source.txt` |
-| `DATABASE_URL` | SQLite database path | `file:documents.db` |
-| `OPENAI_MODEL` | LLM model for responses | `gpt-4o-mini` |
-| `OPENAI_EMBEDDING_MODEL` | Model for embeddings | `text-embedding-3-small` |
+| Variable                 | Description              | Default                  |
+| ------------------------ | ------------------------ | ------------------------ |
+| `OPENAI_API_KEY`         | Your OpenAI API key      | Required                 |
+| `PORT`                   | Server port              | `3005`                   |
+| `DATA_SOURCE_PATH`       | Path to source text file | `./data/source.txt`      |
+| `DATABASE_URL`           | SQLite database path     | `file:documents.db`      |
+| `OPENAI_MODEL`           | LLM model for responses  | `gpt-5-mini`             |
+| `OPENAI_EMBEDDING_MODEL` | Model for embeddings     | `text-embedding-3-small` |
 
 ## API Endpoints
 
@@ -84,6 +90,7 @@ curl -X POST http://localhost:3005/api/index \
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -105,6 +112,7 @@ curl -X POST http://localhost:3005/api/chat \
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -121,6 +129,7 @@ curl -X POST http://localhost:3005/api/chat \
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
