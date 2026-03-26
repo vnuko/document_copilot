@@ -1,15 +1,12 @@
-import { ChatOpenAI } from '@langchain/openai';
-import { RunnableSequence, RunnablePassthrough, RunnableLambda } from '@langchain/core/runnables';
-import { ChatPromptTemplate } from '@langchain/core/prompts';
-import { StringOutputParser } from '@langchain/core/output_parsers';
-import { LibSQLVectorStore } from '@langchain/community/vectorstores/libsql';
-import { config } from '../config/index.js';
-import { vectorStoreService } from './vectorstore.service.js';
-import { STANDALONE_QUESTION_PROMPT, ANSWER_PROMPT } from './templates/index.js';
+import { MemorySaver } from "@langchain/langgraph";
+import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { ChatOpenAI } from "@langchain/openai";
+import { tool } from "@langchain/core/tools";
+import { config } from "../config/index.js";
+import { vectorStoreService } from "./vectorstore.service.js";
 
 export interface ChatDebugInfo {
   originalQuestion: string;
-  standaloneQuestion: string;
   retrievedDocuments: string[];
   context: string;
 }
@@ -19,78 +16,91 @@ export interface ChatResult {
   debug?: ChatDebugInfo;
 }
 
+const retrievalTool = tool(
+  async ({ query }) => {
+    const retriever = vectorStoreService.getVectorStore().asRetriever(3);
+    const docs = await retriever.invoke(query);
+    return docs.map((d) => d.pageContent).join("\n\n");
+  },
+  {
+    name: "retrieve_documents",
+    description: "Search and retrieve relevant documents from the knowledge base. Use this to find information to answer user questions.",
+    schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "The search query to find relevant documents",
+        },
+      },
+      required: ["query"],
+    },
+  }
+);
+
+const llm = new ChatOpenAI({
+  model: config.openaiModel,
+  openAIApiKey: config.openaiApiKey,
+});
+
+const SYSTEM_PROMPT = `You are a helpful and friendly support assistant.
+
+Your job is to answer the user's question using the retrieved documents, but in your own words.
+
+IMPORTANT RULES:
+- Do NOT copy sentences or phrases from the documents.
+- Do NOT mimic the writing style of the source material.
+- Rewrite everything in a clear, simple, and natural way.
+- Explain as if you are talking to a customer who has not read the document.
+- Keep the answer concise and easy to understand.
+- Focus on clarity over completeness.
+
+Use the retrieve_documents tool to search for relevant information before answering.
+
+If the retrieved documents don't contain the answer, say:
+"I'm sorry, I don't know the answer to that."`;
+
+const checkpointer = new MemorySaver();
+
+const agent = createReactAgent({
+  llm,
+  tools: [retrievalTool],
+  checkpointer,
+  messageModifier: SYSTEM_PROMPT,
+});
+
 class ChatService {
-  private llm = new ChatOpenAI({
-    model: config.openaiModel,
-    openAIApiKey: config.openaiApiKey,
-  });
-
-  private _retriever: ReturnType<LibSQLVectorStore['asRetriever']> | null = null;
-
-  private get retriever() {
-    if (!this._retriever) {
-      this._retriever = vectorStoreService.getVectorStore().asRetriever(3);
-    }
-    return this._retriever;
+  async chat(question: string, threadId: string): Promise<string> {
+    const result = await agent.invoke(
+      { messages: [{ role: "user", content: question }] },
+      { configurable: { thread_id: threadId } }
+    );
+    const lastMessage = result.messages[result.messages.length - 1];
+    const content = lastMessage.content;
+    const output = typeof content === "string" ? content : content.map((c: { type: string; text?: string }) => (c.type === "text" ? c.text ?? "" : "")).join("");
+    return output;
   }
 
-  private standaloneQuestionChain = ChatPromptTemplate.fromTemplate(STANDALONE_QUESTION_PROMPT)
-    .pipe(this.llm)
-    .pipe(new StringOutputParser());
+  async chatWithDebug(question: string, threadId: string): Promise<ChatResult> {
+    const retriever = vectorStoreService.getVectorStore().asRetriever(3);
+    const docs = await retriever.invoke(question);
+    const context = docs.map((d) => d.pageContent).join("\n\n");
 
-  private answerChain = ChatPromptTemplate.fromTemplate(ANSWER_PROMPT)
-    .pipe(this.llm)
-    .pipe(new StringOutputParser());
+    const result = await agent.invoke(
+      { messages: [{ role: "user", content: question }] },
+      { configurable: { thread_id: threadId } }
+    );
 
-  private retrieveContext = RunnableLambda.from(async (question: string) => {
-    const docs = await this.retriever.invoke(question);
-    const contents = docs.map((d) => d.pageContent);
-    return {
-      context: contents.join('\n\n'),
-      documents: contents,
-    };
-  });
-
-  private pipeline = RunnableSequence.from([
-    async (input: { question: string }) => {
-      const standaloneQuestion = await this.standaloneQuestionChain.invoke({
-        question: input.question,
-      });
-
-      const { context, documents } = await this.retrieveContext.invoke(standaloneQuestion);
-
-      return {
-        originalQuestion: input.question,
-        standaloneQuestion,
-        context,
-        documents,
-      };
-    },
-    async (data) => {
-      const output = await this.answerChain.invoke({
-        context: data.context,
-        question: data.originalQuestion,
-      });
-
-      return { output, ...data };
-    },
-  ]);
-
-  async chat(question: string): Promise<string> {
-    const result = await this.pipeline.invoke({ question });
-    return result.output;
-  }
-
-  async chatWithDebug(question: string): Promise<ChatResult> {
-    const result = await this.pipeline.invoke({ question });
+    const lastMessage = result.messages[result.messages.length - 1];
+    const content = lastMessage.content;
+    const output = typeof content === "string" ? content : content.map((c: { type: string; text?: string }) => (c.type === "text" ? c.text ?? "" : "")).join("");
 
     return {
-      output: result.output,
+      output,
       debug: {
-        originalQuestion: result.originalQuestion,
-        standaloneQuestion: result.standaloneQuestion,
-        retrievedDocuments: result.documents,
-        context: result.context,
+        originalQuestion: question,
+        retrievedDocuments: docs.map((d) => d.pageContent),
+        context,
       },
     };
   }
