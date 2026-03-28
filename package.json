@@ -9,6 +9,7 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
+    "langchain": "^1.2.37",
     "@langchain/community": "^1.1.24",
     "@langchain/core": "^1.1.34",
     "@langchain/langgraph": "^1.2.6",

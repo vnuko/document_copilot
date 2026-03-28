@@ -1,108 +1,75 @@
-import { MemorySaver } from "@langchain/langgraph";
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { ChatOpenAI } from "@langchain/openai";
-import { tool } from "@langchain/core/tools";
-import { config } from "../config/index.js";
-import { vectorStoreService } from "./vectorstore.service.js";
-
-export interface ChatDebugInfo {
-  originalQuestion: string;
-  retrievedDocuments: string[];
-  context: string;
-}
-
-export interface ChatResult {
-  output: string;
-  debug?: ChatDebugInfo;
-}
-
-const retrievalTool = tool(
-  async ({ query }) => {
-    const retriever = vectorStoreService.getVectorStore().asRetriever(3);
-    const docs = await retriever.invoke(query);
-    return docs.map((d) => d.pageContent).join("\n\n");
-  },
-  {
-    name: "retrieve_documents",
-    description: "Search and retrieve relevant documents from the knowledge base. Use this to find information to answer user questions.",
-    schema: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "The search query to find relevant documents",
-        },
-      },
-      required: ["query"],
-    },
-  }
-);
-
-const llm = new ChatOpenAI({
-  model: config.openaiModel,
-  openAIApiKey: config.openaiApiKey,
-});
-
-const SYSTEM_PROMPT = `You are a helpful and friendly support assistant.
-
-Your job is to answer the user's question using the retrieved documents, but in your own words.
-
-IMPORTANT RULES:
-- Do NOT copy sentences or phrases from the documents.
-- Do NOT mimic the writing style of the source material.
-- Rewrite everything in a clear, simple, and natural way.
-- Explain as if you are talking to a customer who has not read the document.
-- Keep the answer concise and easy to understand.
-- Focus on clarity over completeness.
-
-Use the retrieve_documents tool to search for relevant information before answering.
-
-If the retrieved documents don't contain the answer, say:
-"I'm sorry, I don't know the answer to that."`;
-
-const checkpointer = new MemorySaver();
-
-const agent = createReactAgent({
-  llm,
-  tools: [retrievalTool],
-  checkpointer,
-  messageModifier: SYSTEM_PROMPT,
-});
+import { ChatPromptTemplate } from '@langchain/core/prompts';
+import { StringOutputParser } from '@langchain/core/output_parsers';
+import { vectorStoreService } from './vectorstore.service.js';
+import { memoryService } from './memory.service.js';
+import { STANDALONE_QUESTION_PROMPT } from '../langchain/prompts/standalone.question.prompt.js';
+import { ANSWER_PROMPT } from '../langchain/prompts/answer.prompt.js';
+import { model } from '../langchain/models/openai.model.js';
+import { ChatResult } from '../types/index.js';
 
 class ChatService {
-  async chat(question: string, threadId: string): Promise<string> {
-    const result = await agent.invoke(
-      { messages: [{ role: "user", content: question }] },
-      { configurable: { thread_id: threadId } }
-    );
-    const lastMessage = result.messages[result.messages.length - 1];
-    const content = lastMessage.content;
-    const output = typeof content === "string" ? content : content.map((c: { type: string; text?: string }) => (c.type === "text" ? c.text ?? "" : "")).join("");
-    return output;
+  async chatSimple(question: string, threadId: string): Promise<ChatResult> {
+    return this.chat(question, threadId, false);
   }
 
-  async chatWithDebug(question: string, threadId: string): Promise<ChatResult> {
-    const retriever = vectorStoreService.getVectorStore().asRetriever(3);
-    const docs = await retriever.invoke(question);
-    const context = docs.map((d) => d.pageContent).join("\n\n");
+  async chatwithDebug(question: string, threadId: string): Promise<ChatResult> {
+    return this.chat(question, threadId, true);
+  }
 
-    const result = await agent.invoke(
-      { messages: [{ role: "user", content: question }] },
-      { configurable: { thread_id: threadId } }
-    );
+  private async chat(
+    question: string,
+    threadId: string,
+    includeDebug: boolean,
+  ): Promise<ChatResult> {
+    const standaloneQuestion = await this.getStandaloneQuestion(question);
+    const { context, docs } = await this.getContext(standaloneQuestion);
+    const history = memoryService.formatHistoryToString(threadId);
+    const response = await this.getResponse(context, question, history);
 
-    const lastMessage = result.messages[result.messages.length - 1];
-    const content = lastMessage.content;
-    const output = typeof content === "string" ? content : content.map((c: { type: string; text?: string }) => (c.type === "text" ? c.text ?? "" : "")).join("");
+    const result: ChatResult = { output: response };
 
-    return {
-      output,
-      debug: {
-        originalQuestion: question,
-        retrievedDocuments: docs.map((d) => d.pageContent),
-        context,
-      },
-    };
+    memoryService.pushToMemory(threadId, question, response);
+
+    result.debug = includeDebug
+      ? {
+          originalQuestion: question,
+          queryQuestion: standaloneQuestion,
+          retrievedDocuments: docs.map((doc) => doc.pageContent),
+          context,
+        }
+      : undefined;
+
+    return result;
+  }
+
+  private async getResponse(context: string, question: string, history: string): Promise<string> {
+    const responseChain = ChatPromptTemplate.fromTemplate(ANSWER_PROMPT)
+      .pipe(model)
+      .pipe(new StringOutputParser());
+
+    return responseChain.invoke({ context, question, history });
+  }
+
+  private async getStandaloneQuestion(question: string): Promise<string> {
+    const standaloneQuestionChain = ChatPromptTemplate.fromTemplate(STANDALONE_QUESTION_PROMPT)
+      .pipe(model)
+      .pipe(new StringOutputParser());
+
+    return standaloneQuestionChain.invoke({ question });
+  }
+
+  private async getContext(standaloneQuestion: string): Promise<{ context: string; docs: any[] }> {
+    const retriever = vectorStoreService.getVectorStore().asRetriever(5);
+    const docs = await retriever.invoke(standaloneQuestion);
+    const context = this.squashDocs(docs);
+    return { context, docs };
+  }
+
+  private squashDocs(docs: any[]): string {
+    return docs
+      .map((doc, i) => doc.pageContent.trim())
+      .filter(Boolean)
+      .join('\n\n---\n\n');
   }
 }
 
