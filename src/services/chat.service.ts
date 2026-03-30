@@ -1,11 +1,75 @@
+import { StateGraph, START, END, Annotation, MemorySaver } from '@langchain/langgraph';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { vectorStoreService } from './vectorstore.service.js';
-import { memoryService } from './memory.service.js';
 import { STANDALONE_QUESTION_PROMPT } from '../langchain/prompts/standalone.question.prompt.js';
 import { ANSWER_PROMPT } from '../langchain/prompts/answer.prompt.js';
 import { model } from '../langchain/models/openai.model.js';
 import { ChatResult } from '../types/index.js';
+
+const RagState = Annotation.Root({
+  question: Annotation<string>(),
+  standaloneQuestion: Annotation<string>(),
+  context: Annotation<string>(),
+  docs: Annotation<any[]>(),
+  history: Annotation<string>(),
+  response: Annotation<string>(),
+  messages: Annotation<{ role: string; content: string }[]>({
+    reducer: (prev, next) => [...prev, ...next],
+    default: () => [],
+  }),
+});
+
+async function standaloneNode(state: typeof RagState.State) {
+  const chain = ChatPromptTemplate.fromTemplate(STANDALONE_QUESTION_PROMPT)
+    .pipe(model)
+    .pipe(new StringOutputParser());
+
+  const standaloneQuestion = await chain.invoke({ question: state.question });
+  return { standaloneQuestion };
+}
+
+async function retrieveNode(state: typeof RagState.State) {
+  const retriever = vectorStoreService.getVectorStore().asRetriever(5);
+  const docs = await retriever.invoke(state.standaloneQuestion);
+  const context = docs
+    .map(doc => doc.pageContent.trim())
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+
+  return { docs, context };
+}
+
+async function generateNode(state: typeof RagState.State) {
+  const chain = ChatPromptTemplate.fromTemplate(ANSWER_PROMPT)
+    .pipe(model)
+    .pipe(new StringOutputParser());
+
+  const response = await chain.invoke({
+    context: state.context,
+    question: state.question,
+    history: state.history,
+  });
+
+  const messages = [
+    { role: 'human', content: state.question },
+    { role: 'ai', content: response },
+  ];
+
+  return { response, messages };
+}
+
+const graph = new StateGraph(RagState)
+  .addNode('standalone', standaloneNode)
+  .addNode('retrieve', retrieveNode)
+  .addNode('generate', generateNode)
+  .addEdge(START, 'standalone')
+  .addEdge('standalone', 'retrieve')
+  .addEdge('retrieve', 'generate')
+  .addEdge('generate', END);
+
+const checkpointer = new MemorySaver();
+const app = graph.compile({ checkpointer });
 
 class ChatService {
   async chatSimple(question: string, threadId: string): Promise<ChatResult> {
@@ -16,60 +80,41 @@ class ChatService {
     return this.chat(question, threadId, true);
   }
 
-  private async chat(
-    question: string,
-    threadId: string,
-    includeDebug: boolean,
-  ): Promise<ChatResult> {
-    const standaloneQuestion = await this.getStandaloneQuestion(question);
-    const { context, docs } = await this.getContext(standaloneQuestion);
-    const history = memoryService.formatHistoryToString(threadId);
-    const response = await this.getResponse(context, question, history);
+  private async chat(question: string, threadId: string, includeDebug: boolean): Promise<ChatResult> {
+    const config = { configurable: { thread_id: threadId } };
 
-    const result: ChatResult = { output: response };
+    const previousState = await app.getState(config);
+    const history = this.formatHistory(previousState?.values?.messages);
 
-    memoryService.pushToMemory(threadId, question, response);
+    const result = await app.invoke(
+      { question, history },
+      config
+    );
 
-    result.debug = includeDebug
-      ? {
-          originalQuestion: question,
-          queryQuestion: standaloneQuestion,
-          retrievedDocuments: docs.map((doc) => doc.pageContent),
-          context,
-        }
-      : undefined;
+    const chatResult: ChatResult = { output: result.response };
 
-    return result;
+    if (includeDebug) {
+      chatResult.debug = {
+        originalQuestion: question,
+        queryQuestion: result.standaloneQuestion,
+        retrievedDocuments: result.docs.map(doc => doc.pageContent),
+        context: result.context,
+      };
+    }
+
+    return chatResult;
   }
 
-  private async getResponse(context: string, question: string, history: string): Promise<string> {
-    const responseChain = ChatPromptTemplate.fromTemplate(ANSWER_PROMPT)
-      .pipe(model)
-      .pipe(new StringOutputParser());
+  private formatHistory(messages?: { role: string; content: string }[]): string {
+    if (!messages || messages.length === 0) {
+      return 'No previous conversation.';
+    }
 
-    return responseChain.invoke({ context, question, history });
-  }
+    const recentMessages = messages.slice(-20);
 
-  private async getStandaloneQuestion(question: string): Promise<string> {
-    const standaloneQuestionChain = ChatPromptTemplate.fromTemplate(STANDALONE_QUESTION_PROMPT)
-      .pipe(model)
-      .pipe(new StringOutputParser());
-
-    return standaloneQuestionChain.invoke({ question });
-  }
-
-  private async getContext(standaloneQuestion: string): Promise<{ context: string; docs: any[] }> {
-    const retriever = vectorStoreService.getVectorStore().asRetriever(5);
-    const docs = await retriever.invoke(standaloneQuestion);
-    const context = this.squashDocs(docs);
-    return { context, docs };
-  }
-
-  private squashDocs(docs: any[]): string {
-    return docs
-      .map((doc, i) => doc.pageContent.trim())
-      .filter(Boolean)
-      .join('\n\n---\n\n');
+    return recentMessages
+      .map(msg => `${msg.role === 'human' ? 'Human' : 'AI'}: ${msg.content}`)
+      .join('\n');
   }
 }
 
