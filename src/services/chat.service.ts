@@ -2,9 +2,9 @@ import { StateGraph, START, END, Annotation, MemorySaver } from '@langchain/lang
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { vectorStoreService } from './vectorstore.service.js';
-import { STANDALONE_QUESTION_PROMPT } from '../langchain/prompts/standalone.question.prompt.js';
-import { ANSWER_PROMPT } from '../langchain/prompts/answer.prompt.js';
-import { model } from '../langchain/models/openai.model.js';
+import { STANDALONE_QUESTION_PROMPT } from '../llm/prompts/standalone.question.prompt.js';
+import { ANSWER_PROMPT } from '../llm/prompts/answer.prompt.js';
+import { model } from '../llm/models/openai.model.js';
 import { ChatResult } from '../types/index.js';
 
 const RagState = Annotation.Root({
