@@ -4,8 +4,6 @@ import { IndexController } from './controllers/index.controller.js';
 import { ChatController } from './controllers/chat.controller.js';
 import { databaseService } from './services/database.service.js';
 import { vectorStoreService } from './services/vectorstore.service.js';
-import { documentService } from './services/document.service.js';
-import { chatService } from './services/chat.service.js';
 import { config } from './config/index.js';
 
 export async function createApp(): Promise<Express> {
@@ -32,5 +30,3 @@ export async function createApp(): Promise<Express> {
 
   return app;
 }
-
-export { documentService, chatService };

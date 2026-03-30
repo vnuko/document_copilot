@@ -23,7 +23,7 @@ class VectorStoreService {
       table: 'documents',
       column: 'embedding',
     });
-    
+
     this.initialized = true;
     console.log('Vector store initialized');
   }
@@ -33,10 +33,6 @@ class VectorStoreService {
       throw new Error('Vector store not initialized. Call initialize() first.');
     }
     return this.vectorStore;
-  }
-
-  getEmbeddings(): OpenAIEmbeddings {
-    return this.embeddings;
   }
 }
 
