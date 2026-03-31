@@ -1,6 +1,6 @@
 # Document Copilot
 
-A Retrieval-Augmented Generation (RAG) system built with LangChain that enables conversational Q&A over your custom documents.
+A Retrieval-Augmented Generation (RAG) system built with LangGraph/LangChain that enables conversational Q&A over your custom documents.
 
 ## Overview
 
@@ -8,7 +8,7 @@ Document Copilot indexes your text documents and provides an intelligent chatbot
 
 ## Tech Stack
 
-- **LangChain** - Orchestration framework for RAG pipeline
+- **LangGraph/LangChain** - Orchestration framework for RAG pipeline
 - **OpenAI API** - LLM for reasoning and embeddings
 - **SQLite** with vector extension - Lightweight vector database
 - **Express.js** - REST API server
